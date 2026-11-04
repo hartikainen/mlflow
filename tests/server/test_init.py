@@ -8,6 +8,7 @@ from datetime import date
 from unittest import mock
 
 import pytest
+import uvicorn
 
 from mlflow import server
 from mlflow.environment_variables import (
@@ -484,6 +485,44 @@ def test_run_server_win32(mock_exec_cmd, monkeypatch):
             port="",
         )
     mock_exec_cmd.assert_called_once()
+
+
+@pytest.mark.parametrize("application", ["app", "create_app"])
+def test_uvicorn_imports_plugin_only_in_worker(mock_exec_cmd, monkeypatch, tmp_path, application):
+    monkeypatch.setenv("MLFLOW_SERVER_ENABLE_JOB_EXECUTION", "false")
+    module_name = f"test_deferred_mlflow_{application}"
+    (tmp_path / f"{module_name}.py").write_text(
+        "class App:\n"
+        "    async def __call__(self, scope, receive, send):\n"
+        "        pass\n"
+        "app = App()\n"
+        "def create_app():\n"
+        "    return app\n"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    target = f"{module_name}:{application}"
+    with mock.patch.object(server, "_find_app", return_value=target):
+        server._run_server(
+            file_store_path="",
+            registry_store_uri="",
+            default_artifact_root="",
+            serve_artifacts="",
+            artifacts_only="",
+            artifacts_destination="",
+            host="localhost",
+            port=5000,
+            app_name="test-plugin",
+        )
+    assert module_name not in sys.modules
+    command = mock_exec_cmd.call_args.args[0]
+    assert command[-1] == target
+    assert "--factory" not in command
+    configuration = uvicorn.Config(target, interface="asgi3", proxy_headers=False)
+    try:
+        configuration.load()
+        assert configuration.loaded_app is sys.modules[module_name].app
+    finally:
+        sys.modules.pop(module_name, None)
 
 
 def test_run_server_with_uvicorn(mock_exec_cmd, monkeypatch):

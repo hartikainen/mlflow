@@ -539,7 +539,8 @@ def _run_server(
         app = "mlflow.server.fastapi_app:app" if using_uvicorn else f"{__name__}:app"
     else:
         app = _find_app(app_name)
-        is_factory = _is_factory(app)
+        # Uvicorn detects factories in its worker, avoiding a second application import.
+        is_factory = not using_uvicorn and _is_factory(app)
         # `waitress` doesn't support `()` syntax for factory functions.
         # Instead, we need to use the `--call` flag.
         # Don't use () syntax if we're using uvicorn
